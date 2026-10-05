@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"/>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23060b14'/%3E%3Ccircle cx='8' cy='8' r='4' fill='%23ff5cc8'/%3E%3C/svg%3E"/>
+<title>多項式戰機：運算與因式分解</title>
+<style>
+  @font-face { font-family: 'Geist Mono'; src: url('fonts/geist-mono-400.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+  @font-face { font-family: 'Geist Mono'; src: url('fonts/geist-mono-500.woff2') format('woff2'); font-weight: 500; font-display: swap; }
+  @font-face { font-family: 'Geist Mono'; src: url('fonts/geist-mono-200.woff2') format('woff2'); font-weight: 200; font-display: swap; }
+  :root {
+    --mono: 'Geist Mono', ui-monospace, Menlo, monospace;
+    --snow: #e8f2fb;
+    --faint: rgba(232, 242, 251, 0.42);
+    --acc: #ff5cc8;
+    --acc-title: #4de2ff;   /* the title reads in canyon cyan; the rest of the UI keeps the magenta accent */
+    --acc-dim: rgba(255, 92, 200, 0.32);
+  }
+  html, body { margin:0; padding:0; height:100%; background:#05070e; overflow:hidden; }
+  body { touch-action:none; overscroll-behavior:none; }
+  body.playing { cursor: crosshair; }
+  #app { position:fixed; inset:0; }
+  #gl { display:block; width:100%; height:100%; }
+
+  /* ---- readability gradients + scanlines (menu only) -------------------- */
+  #vig {
+    position:fixed; inset:0; z-index:5; pointer-events:none;
+    opacity:0; transition:opacity .45s ease;
+    background:linear-gradient(103deg, rgba(4,6,12,0) 34%, rgba(4,6,12,.58) 68%, rgba(3,5,10,.9) 100%);
+  }
+  #vig::before {
+    content:''; position:absolute; inset:0;
+    background:linear-gradient(0deg, rgba(3,5,10,.66) 0%, rgba(3,5,10,0) 30%);
+  }
+  #vig::after {
+    content:''; position:absolute; inset:0;
+    background:repeating-linear-gradient(0deg, rgba(232,242,251,.022) 0 1px, transparent 1px 3px);
+  }
+  body.menu-open #vig { opacity:1; }
+
+  /* ---- terminal corner brackets ----------------------------------------- */
+  #frame { position:fixed; inset:16px; z-index:6; pointer-events:none; opacity:0; transition:opacity .5s ease; }
+  body.menu-open #frame { opacity:1; }
+  #frame i { position:absolute; width:22px; height:22px; border:0 solid var(--acc-dim); }
+  #frame .tl { left:0; top:0; border-top-width:1px; border-left-width:1px; }
+  #frame .tr { right:0; top:0; border-top-width:1px; border-right-width:1px; }
+  #frame .bl { left:0; bottom:0; border-bottom-width:1px; border-left-width:1px; }
+  #frame .br { right:0; bottom:0; border-bottom-width:1px; border-right-width:1px; }
+
+  /* ---- right-rail menu --------------------------------------------------- */
+  #menu {
+    position:fixed; right:6.5vw; top:50%; transform:translateY(-50%); z-index:12;
+    text-align:right; font-family:var(--mono); color:var(--snow);
+    text-shadow:0 1px 6px rgba(3,6,12,.9);
+    user-select:none; -webkit-user-select:none; pointer-events:none;
+    padding-right:env(safe-area-inset-right);
+  }
+  .screen { display:none; }
+  .screen.active { display:block; }
+  .screen.active .anim {
+    animation:enter .55s cubic-bezier(.22,.8,.36,1) both;
+    animation-delay:calc(var(--i, 0) * 66ms);
+  }
+  @keyframes enter { from { opacity:0; transform:translateX(28px); } to { opacity:1; transform:none; } }
+
+  .ov { font-size:10.5px; font-weight:500; letter-spacing:.34em; color:rgba(255,92,200,.78); }
+  .ttl { margin:14px 0 0; font-size:clamp(40px, 6vw, 84px); font-weight:200; letter-spacing:-.02em; line-height:1.02; }
+  .ttl b { font-weight:500; color:var(--acc-title); }
+  .ttl.small { font-size:clamp(30px, 4.2vw, 56px); }
+  .sub { margin-top:14px; font-size:12px; letter-spacing:.1em; color:var(--faint); }
+
+  .items { margin-top:36px; }
+  .item {
+    padding:10px 0; font-size:13px; font-weight:500; letter-spacing:.28em;
+    color:rgba(232,242,251,.52); cursor:pointer; pointer-events:auto;
+    transition:color .18s ease; min-height:24px;
+  }
+  .item .num { color:rgba(232,242,251,.26); margin-right:14px; transition:color .18s ease; }
+  .item.sel { color:#fff; }
+  .item.sel .num { color:var(--acc); }
+  .item.nudge { animation:nudge .18s ease-out 1; }
+  @keyframes nudge { 0% { transform:translateX(0); } 35% { transform:translateX(-5px); } 70% { transform:translateX(2px); } 100% { transform:translateX(0); } }
+  .item .val { margin-left:18px; color:#fff; }
+  .item .chev { color:var(--faint); }
+
+  .rows { margin-top:26px; }
+  .row {
+    display:flex; justify-content:flex-end; align-items:baseline; gap:20px;
+    padding:6px 0; font-size:11.5px; letter-spacing:.14em;
+  }
+  .row .k { color:#fff; font-weight:500; letter-spacing:.22em; }
+  .row .v { color:var(--faint); }
+  .row.me .k, .row.me .v { color:var(--acc); }
+
+  #foot {
+    position:fixed; left:24px; bottom:calc(20px + env(safe-area-inset-bottom)); z-index:6; pointer-events:none;
+    font-family:var(--mono); font-size:10px; font-weight:500; letter-spacing:.3em;
+    color:var(--faint); opacity:0; transition:opacity .5s ease;
+  }
+  body.menu-open #foot { opacity:.6; }
+
+  /* ---- HUD --------------------------------------------------------------- */
+  #hud {
+    position:fixed; inset:0; z-index:10; pointer-events:none; opacity:0; transition:opacity 1s ease;
+    font-family:var(--mono); color:var(--snow);
+    text-shadow:0 1px 4px rgba(3,6,12,.9), 0 0 16px rgba(83,213,253,.22);
+    user-select:none; -webkit-user-select:none;
+  }
+  #topbar {
+    position:absolute; left:calc(28px + env(safe-area-inset-left)); top:calc(22px + env(safe-area-inset-top));
+    display:flex; gap:22px; align-items:baseline;
+    font-size:13px; font-weight:500; letter-spacing:.26em;
+  }
+  #topbar b { color:#53d5fd; font-weight:500; }
+  #combo { color:#ffb54d; }
+  #timer {
+    position:absolute; left:50%; top:calc(20px + env(safe-area-inset-top)); transform:translateX(-50%);
+    font-size:26px; font-weight:200; letter-spacing:.14em;
+  }
+  /* 題目橫幅 */
+  #qbanner {
+    position:absolute; left:50%; top:calc(64px + env(safe-area-inset-top)); transform:translateX(-50%);
+    text-align:center; max-width:min(92vw, 760px);
+  }
+  #qtopic {
+    display:inline-block; font-size:10.5px; font-weight:500; letter-spacing:.34em;
+    color:rgba(255,92,200,.85); border:1px solid rgba(255,92,200,.35);
+    padding:4px 14px; border-radius:3px; background:rgba(5,9,16,.55);
+  }
+  #qtext {
+    margin-top:10px; font-size:clamp(17px, 2.6vw, 27px); font-weight:500; letter-spacing:.06em;
+    color:#fff; padding:10px 22px; border-radius:6px; background:rgba(5,9,16,.62);
+    border:1px solid rgba(83,213,253,.28); display:inline-block;
+    box-shadow:0 0 24px rgba(83,213,253,.12);
+  }
+  #center-msg {
+    position:absolute; left:50%; top:30%; transform:translateX(-50%);
+    font-size:46px; font-weight:200; letter-spacing:.24em; color:#fff; opacity:0; transition:opacity .3s ease;
+    text-shadow:0 2px 12px rgba(3,6,12,.95), 0 0 34px rgba(83,213,253,.55);
+    white-space:nowrap;
+  }
+  #crosshair {
+    position:absolute; left:50%; top:50%; width:26px; height:26px; transform:translate(-50%,-50%);
+    opacity:.75;
+  }
+  #crosshair::before, #crosshair::after {
+    content:''; position:absolute; background:#53d5fd;
+    box-shadow:0 0 6px rgba(83,213,253,.8);
+  }
+  #crosshair::before { left:50%; top:0; width:1.5px; height:100%; transform:translateX(-50%); }
+  #crosshair::after { top:50%; left:0; height:1.5px; width:100%; transform:translateY(-50%); }
+  #feed {
+    position:absolute; right:calc(28px + env(safe-area-inset-right)); top:calc(22px + env(safe-area-inset-top));
+    text-align:right; font-size:11.5px; font-weight:500; letter-spacing:.18em; color:var(--faint);
+  }
+  #feed div { transition:opacity .6s ease; margin-bottom:5px; }
+  #feed .ok { color:#6effaa; }
+  #feed .no { color:#ff8098; }
+  #bars {
+    position:absolute; left:50%; bottom:calc(44px + env(safe-area-inset-bottom)); transform:translateX(-50%);
+    width:280px; display:flex; flex-direction:column; gap:7px;
+  }
+  .hbar { height:3px; background:rgba(232,242,251,.14); border-radius:2px; overflow:hidden; }
+  .hbar i { display:block; height:100%; width:100%; border-radius:2px; transition:width .18s ease, background .3s ease; }
+  #hp-fill { background:#53d5fd; }
+  #heat-fill { width:0%; background:#53d5fd; }
+  #speed {
+    position:absolute; right:calc(28px + env(safe-area-inset-right)); bottom:calc(36px + env(safe-area-inset-bottom));
+    font-size:22px; font-weight:200; letter-spacing:.1em;
+  }
+  #hint {
+    position:absolute; left:50%; bottom:calc(16px + env(safe-area-inset-bottom)); transform:translateX(-50%);
+    font-size:10px; font-weight:500; letter-spacing:.3em; opacity:.5; white-space:nowrap;
+  }
+
+  /* ---- 觸控按鈕（只在觸控裝置顯示） -------------------------------------- */
+  .tbtn {
+    position:fixed; z-index:11; display:none; pointer-events:auto;
+    align-items:center; justify-content:center;
+    font-family:var(--mono); font-weight:500; letter-spacing:.2em; color:var(--snow);
+    border:1px solid rgba(83,213,253,.5); border-radius:50%;
+    background:rgba(5,9,16,.5); text-shadow:0 1px 4px rgba(3,6,12,.9);
+    user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;
+  }
+  .tbtn:active { background:rgba(83,213,253,.28); }
+  body.touch.playing .tbtn { display:flex; }
+  #btn-fire {
+    right:calc(22px + env(safe-area-inset-right)); bottom:calc(88px + env(safe-area-inset-bottom));
+    width:84px; height:84px; font-size:13px; border-color:rgba(255,92,200,.6);
+  }
+  #btn-fire:active { background:rgba(255,92,200,.3); }
+  #btn-boost {
+    right:calc(120px + env(safe-area-inset-right)); bottom:calc(48px + env(safe-area-inset-bottom));
+    width:60px; height:60px; font-size:11px;
+  }
+  #btn-pause {
+    right:calc(20px + env(safe-area-inset-right)); top:calc(64px + env(safe-area-inset-top));
+    width:48px; height:48px; font-size:14px; border-radius:8px;
+  }
+
+  #fade {
+    position:fixed; inset:0; background:#05070e; z-index:20; pointer-events:none;
+    transition:opacity 2.6s ease; display:flex; align-items:center; justify-content:center;
+    font-family:var(--mono); color:var(--acc); font-size:13px; letter-spacing:.55em;
+  }
+  #err {
+    position:fixed; inset:0; z-index:30; display:none; align-items:center; justify-content:center;
+    color:#ffb0a0; background:#100d0d; font-family:monospace; padding:2em; text-align:center;
+  }
+
+  /* ---- 手機版 ------------------------------------------------------------ */
+  @media (max-width: 700px) {
+    #menu { right:5vw; left:5vw; text-align:right; }
+    .ttl { font-size:clamp(34px, 11vw, 52px); }
+    .ttl.small { font-size:clamp(26px, 8vw, 40px); }
+    .item { font-size:12px; padding:12px 0; letter-spacing:.22em; }
+    .rows .row { font-size:10.5px; gap:12px; flex-wrap:wrap; justify-content:flex-end; }
+    #timer { font-size:20px; }
+    #topbar { font-size:11px; gap:12px; }
+    #qbanner { top:calc(56px + env(safe-area-inset-top)); }
+    #qtext { font-size:16px; padding:8px 14px; }
+    #center-msg { font-size:30px; }
+    #bars { width:180px; bottom:calc(150px + env(safe-area-inset-bottom)); }
+    #speed { font-size:16px; right:auto; left:calc(22px + env(safe-area-inset-left)); }
+    #hint { display:none; }
+    #feed { font-size:10px; }
+  }
+  @media (max-width: 700px) and (min-height: 500px) {
+    /* 直式手機：開火鈔上移避開油門區 */
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.js",
+    "three/addons/": "./vendor/three/addons/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="vig"></div>
+<div id="frame"><i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i></div>
+
+<!-- ================= right rail: every menu screen lives here ============ -->
+<div id="menu">
+
+  <section class="screen" data-screen="main">
+    <div class="ov anim">霓虹峽谷 // 數學特訓協議</div>
+    <h1 class="ttl anim">多項式 <b>戰機</b></h1>
+    <div class="sub anim">運算與因式分解 —— 射中載有正確答案的無人機。</div>
+    <div class="items">
+      <div class="item anim" data-act="start"><span class="num">[01]</span><span class="lab">出擊</span></div>
+      <div class="item anim" data-act="mode" data-val="mode">
+        <span class="num">[02]</span><span class="lab">課題</span>
+        <span class="val"><span class="chev">‹ </span><span class="vtext">混合特訓</span><span class="chev"> ›</span></span>
+      </div>
+      <div class="item anim" data-act="controls"><span class="num">[03]</span><span class="lab">操作</span></div>
+      <div class="item anim" data-act="settings"><span class="num">[04]</span><span class="lab">設定</span></div>
+    </div>
+  </section>
+
+  <section class="screen" data-screen="controls">
+    <div class="ov anim">飛行手冊</div>
+    <h1 class="ttl small anim">操<b>作</b></h1>
+    <div class="rows">
+      <div class="row anim"><span class="k">目標</span><span class="v">讀題後射中載有正確答案的無人機</span></div>
+      <div class="row anim"><span class="k">滑鼠</span><span class="v">轉向 —— 偏離中心即壓坡度</span></div>
+      <div class="row anim"><span class="k">左鍵 / J</span><span class="v">發射等離子彈 —— 按住連發</span></div>
+      <div class="row anim"><span class="k">觸控</span><span class="v">拖動畫面轉向 · 右下按鈕開火</span></div>
+      <div class="row anim"><span class="k">W / S</span><span class="v">加速 / 減速</span></div>
+      <div class="row anim"><span class="k">Shift</span><span class="v">推進加速 —— 會過熱，需冷卻</span></div>
+      <div class="row anim"><span class="k">空格</span><span class="v">垂直點火 —— 瞬間拉升</span></div>
+      <div class="row anim"><span class="k">Esc</span><span class="v">暫停 / 返回</span></div>
+      <div class="row anim"><span class="k">答錯</span><span class="v">系統離線 2 秒 · 連擊歸零</span></div>
+      <div class="row anim"><span class="k">撞樓</span><span class="v">墜毀重生 —— 留意峽谷兩側</span></div>
+    </div>
+    <div class="items">
+      <div class="item anim" data-act="back"><span class="num">[01]</span><span class="lab">返回</span></div>
+    </div>
+  </section>
+
+  <section class="screen" data-screen="settings">
+    <div class="ov anim">系統</div>
+    <h1 class="ttl small anim">設<b>定</b></h1>
+    <div class="items">
+      <div class="item anim" data-act="quality" data-val="quality">
+        <span class="num">[01]</span><span class="lab">畫質</span>
+        <span class="val"><span class="chev">‹ </span><span class="vtext">均衡</span><span class="chev"> ›</span></span>
+      </div>
+      <div class="item anim" data-act="sound" data-val="sound">
+        <span class="num">[02]</span><span class="lab">聲音</span>
+        <span class="val"><span class="chev">‹ </span><span class="vtext">開</span><span class="chev"> ›</span></span>
+      </div>
+      <div class="item anim" data-act="back"><span class="num">[03]</span><span class="lab">返回</span></div>
+    </div>
+  </section>
+
+  <section class="screen" data-screen="pause">
+    <div class="ov anim">訊號保持</div>
+    <h1 class="ttl small anim">已<b>暫停</b></h1>
+    <div class="items">
+      <div class="item anim" data-act="resume"><span class="num">[01]</span><span class="lab">繼續</span></div>
+      <div class="item anim" data-act="restart"><span class="num">[02]</span><span class="lab">重新開始</span></div>
+      <div class="item anim" data-act="settings"><span class="num">[03]</span><span class="lab">設定</span></div>
+      <div class="item anim" data-act="quit"><span class="num">[04]</span><span class="lab">返回主選單</span></div>
+    </div>
+  </section>
+
+  <section class="screen" data-screen="results">
+    <div class="ov anim">特訓結算</div>
+    <h1 class="ttl small anim" id="r-title">任務 <b>完成</b></h1>
+    <div class="rows" id="r-rows"></div>
+    <div class="items">
+      <div class="item anim" data-act="rematch"><span class="num">[01]</span><span class="lab">再來一局</span></div>
+      <div class="item anim" data-act="quit"><span class="num">[02]</span><span class="lab">主選單</span></div>
+    </div>
+  </section>
+
+</div>
+
+<div id="foot">↑↓ 選擇&nbsp;&nbsp;&nbsp;←→ 切換&nbsp;&nbsp;&nbsp;ENTER 確認&nbsp;&nbsp;&nbsp;ESC 返回</div>
+
+<!-- ================================= HUD ================================= -->
+<div id="hud">
+  <div id="topbar"><b id="who">分數</b><span id="kills">0</span><span id="combo"></span></div>
+  <div id="timer">3:00</div>
+  <div id="qbanner"><span id="qtopic">多項式</span><br/><span id="qtext"></span></div>
+  <div id="center-msg"></div>
+  <div id="crosshair"></div>
+  <div id="feed"></div>
+  <div id="bars">
+    <div class="hbar"><i id="hp-fill"></i></div>
+    <div class="hbar"><i id="heat-fill"></i></div>
+  </div>
+  <div id="speed">0 公里/時</div>
+  <div id="hint">滑鼠 轉向 · 左鍵 開火 · 射中正確答案 · 答錯離線 2 秒 · W S 油門 · SHIFT 加速 · ESC 暫停</div>
+</div>
+
+<button class="tbtn" id="btn-pause" aria-label="暫停">II</button>
+<button class="tbtn" id="btn-boost" aria-label="加速">加速</button>
+<button class="tbtn" id="btn-fire" aria-label="開火">開火</button>
+
+<div id="fade">多 項 式 戰 機</div>
+<div id="err"></div>
+<script type="module">
+  import { boot } from './js/arena/main.js';
+  boot(document.getElementById('app')).catch((e) => {
+    console.error(e);
+    const el = document.getElementById('err');
+    el.style.display = 'flex';
+    el.textContent = '渲染器啟動失敗：' + (e && e.message ? e.message : e);
+  });
+</script>
+</body>
+</html>
